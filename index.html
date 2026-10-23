@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MNIST CNN Visualizer</title>
+<style>
+  :root {
+    --bg:#0b1220; --card:#162033; --card2:#1c2940; --text:#e2e8f0; --muted:#94a3b8;
+    --accent:#22c55e; --blue:#38bdf8; --line:#2b3a55;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif; padding:24px 16px 60px; }
+  .wrap { max-width:1200px; margin:0 auto; }
+  h1 { text-align:center; margin:0 0 4px; font-size:1.8rem; }
+  .sub { text-align:center; color:var(--muted); margin:0 0 24px; }
+  h2 { margin:0 0 12px; font-size:1.25rem; }
+  .card { background:var(--card); border-radius:16px; padding:22px; margin-bottom:22px;
+    box-shadow:0 8px 30px rgba(0,0,0,.35); }
+
+  /* draw + result */
+  .top { display:flex; gap:30px; flex-wrap:wrap; justify-content:center; }
+  .col { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  #digitCanvas { width:280px; height:auto; aspect-ratio:1/1; max-width:100%; background:#000;
+    border:3px solid var(--accent); border-radius:12px; touch-action:none; cursor:crosshair; }
+  .buttons { display:flex; gap:10px; }
+  button { padding:12px 22px; border:0; border-radius:10px; font-size:1rem; font-weight:600;
+    cursor:pointer; color:#fff; background:#475569; }
+  button.primary { background:var(--accent); color:#06280f; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .result { min-width:240px; display:flex; flex-direction:column; justify-content:center; align-items:center; }
+  .big { font-size:6rem; font-weight:800; line-height:1; color:var(--accent); }
+  .conf { color:var(--muted); margin-top:8px; }
+  #status { text-align:center; color:var(--muted); margin-top:14px; min-height:1.2em; }
+  #status.error { color:#f87171; }
+
+  /* pipeline */
+  .flow { display:flex; align-items:stretch; gap:0; overflow-x:auto; padding:6px 4px 14px; }
+  .flow::-webkit-scrollbar { height:10px; }
+  .flow::-webkit-scrollbar-thumb { background:var(--line); border-radius:5px; }
+  .stage { flex:0 0 auto; width:250px; background:var(--card2); border:2px solid var(--line);
+    border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:10px;
+    transition:opacity .4s, border-color .4s, box-shadow .4s; }
+  .stage.wide { width:390px; }
+  .stage.idle { opacity:.35; }
+  .stage.lit { border-color:var(--accent); box-shadow:0 0 22px rgba(34,197,94,.55); }
+  .stage .title { font-weight:700; font-size:1rem; }
+  .stage .tag { display:inline-block; font-size:.72rem; padding:2px 8px; border-radius:20px;
+    background:#0f1a2d; color:var(--blue); margin-right:4px; }
+  .stage .meta { font-size:.8rem; color:var(--muted); line-height:1.5; }
+  .stage .viz { min-height:110px; display:flex; align-items:center; justify-content:center; }
+  .stage .desc { font-size:.8rem; color:var(--muted); border-top:1px solid var(--line); padding-top:8px; }
+  .wait { color:#475569; font-size:.85rem; }
+  .arrow { flex:0 0 auto; width:38px; display:flex; align-items:center; justify-content:center;
+    color:var(--muted); font-size:1.5rem; }
+
+  .maps { display:grid; grid-template-columns:repeat(8, 40px); gap:3px; }
+  .maps canvas { width:40px; height:40px; image-rendering:pixelated; border-radius:3px; background:#000; }
+  canvas.pix { image-rendering:pixelated; border-radius:6px; background:#000; }
+
+  .out-row { display:flex; align-items:center; gap:8px; font-size:.85rem; margin:3px 0; width:100%; }
+  .out-row .d { width:16px; text-align:right; font-weight:700; }
+  .out-row .bar { flex:1; height:12px; background:#0f1a2d; border-radius:6px; overflow:hidden; }
+  .out-row .fill { height:100%; width:0; background:var(--blue); transition:width .5s; }
+  .out-row.top .fill { background:var(--accent); }
+  .out-row.top .d { color:var(--accent); }
+  .out-row .v { width:54px; text-align:right; color:var(--muted); }
+
+  /* explanation */
+  .steps { counter-reset:s; display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
+  .step { background:var(--card2); border-radius:12px; padding:14px 14px 14px 52px; position:relative; }
+  .step::before { counter-increment:s; content:counter(s); position:absolute; left:14px; top:14px;
+    width:28px; height:28px; border-radius:50%; background:var(--accent); color:#06280f;
+    font-weight:800; display:flex; align-items:center; justify-content:center; }
+  .step b { display:block; margin-bottom:4px; }
+  .step p { margin:0; font-size:.88rem; color:var(--muted); line-height:1.55; }
+  table { width:100%; border-collapse:collapse; font-size:.88rem; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  tfoot td { font-weight:700; color:var(--accent); }
+  .filters { display:grid; grid-template-columns:repeat(auto-fill, 42px); gap:6px; margin-top:10px; }
+  .filters canvas { width:42px; height:42px; image-rendering:pixelated; border-radius:4px; }
+  .legend { font-size:.8rem; color:var(--muted); margin-top:8px; }
+  pre { background:#0b1424; padding:14px; border-radius:10px; overflow-x:auto; font-size:.82rem; line-height:1.5; color:#cbd5e1; margin:0; }
+
+  .tablewrap { overflow-x:auto; }
+  table { min-width:520px; }
+  footer { text-align:center; color:var(--muted); font-size:.95rem; padding:18px 0 4px;
+    border-top:1px solid var(--line); margin-top:8px; letter-spacing:.3px; }
+  footer b { color:var(--accent); font-weight:700; }
+
+  /* ---------- tablet ---------- */
+  @media (max-width: 1000px) {
+    .stage { width:230px; }
+    .stage.wide { width:370px; }
+  }
+
+  /* ---------- mobile: vertical pipeline ---------- */
+  @media (max-width: 760px) {
+    body { padding:14px 10px 34px; }
+    h1 { font-size:1.4rem; }
+    .sub { font-size:.9rem; margin-bottom:16px; }
+    h2 { font-size:1.1rem; }
+    .card { padding:16px; margin-bottom:16px; border-radius:14px; }
+
+    .top { gap:16px; }
+    .col { width:100%; }
+    #digitCanvas { width:100%; max-width:340px; }
+    .buttons { width:100%; max-width:340px; }
+    .buttons button { flex:1; padding:14px 10px; }
+    .big { font-size:4.2rem; }
+
+    .flow { flex-direction:column; overflow:visible; padding:0; }
+    .stage, .stage.wide { width:100%; }
+    .arrow { width:100%; height:38px; font-size:0; }
+    .arrow::before { content:"\2B07"; font-size:1.4rem; color:var(--accent); }
+
+    .maps { grid-template-columns:repeat(8, minmax(0, 1fr)); width:100%; }
+    .maps canvas { width:100%; height:auto; aspect-ratio:1/1; }
+    .stage .viz { min-height:90px; }
+    .viz canvas.pix { max-width:100%; }
+
+    .steps { grid-template-columns:1fr; }
+    .filters { grid-template-columns:repeat(auto-fill, minmax(34px, 1fr)); }
+    .filters canvas { width:100%; height:auto; aspect-ratio:1/1; }
+    th, td { padding:7px 8px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MNIST CNN Visualizer</h1>
+  <p class="sub">Draw a digit and watch it travel through every layer of the neural network.</p>
+
+  <!-- DRAW + RESULT -->
+  <div class="card">
+    <div class="top">
+      <div class="col">
+        <canvas id="digitCanvas" width="280" height="280"></canvas>
+        <div class="buttons">
+          <button id="clearBtn">Clear</button>
+          <button id="predictBtn" class="primary">Predict</button>
+        </div>
+      </div>
+      <div class="result">
+        <div class="big" id="digit">-</div>
+        <div class="conf" id="conf">Confidence: --</div>
+      </div>
+    </div>
+    <div id="status">Draw a digit to begin.</div>
+  </div>
+
+  <!-- LIVE PIPELINE -->
+  <div class="card">
+    <h2>Live network: layer by layer</h2>
+    <div class="flow" id="flow"></div>
+    <div class="legend">Bright = strongly activated. Each conv/pool map is scaled on its own so you can see its pattern.</div>
+  </div>
+
+  <!-- HOW IT WORKS -->
+  <div class="card">
+    <h2>How it works</h2>
+    <div class="steps">
+      <div class="step"><b>Input image</b><p>Your drawing becomes a 28×28 grid of numbers (0 = black, 1 = white), just like MNIST training images.</p></div>
+      <div class="step"><b>Conv2D (32 filters)</b><p>32 small 3×3 filters slide across the image. Each one detects a simple pattern such as an edge or a stroke direction, producing a feature map. ReLU removes negative values.</p></div>
+      <div class="step"><b>MaxPooling</b><p>Looks at each 2×2 block and keeps only the largest value. The map gets 2× smaller but keeps the strongest signals.</p></div>
+      <div class="step"><b>Conv2D (64 filters)</b><p>Looks at the pooled maps and combines simple edges into bigger shapes: curves, corners, loops.</p></div>
+      <div class="step"><b>MaxPooling</b><p>Shrinks again to 5×5 per map, so the network focuses on what is there and less on exactly where.</p></div>
+      <div class="step"><b>Flatten</b><p>All 64 maps of 5×5 are unrolled into one list of 1600 numbers so dense layers can read them.</p></div>
+      <div class="step"><b>Dense 64 and Dense 32</b><p>Every neuron connects to every value from the previous layer, weighs them, and decides how strongly to fire. These layers combine shapes into digit-like evidence.</p></div>
+      <div class="step"><b>Dense 10 (softmax)</b><p>One neuron per digit 0 to 9. Softmax turns the scores into probabilities that add up to 100%. The highest one is the prediction.</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Architecture summary</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Layer</th><th>Settings</th><th>Output shape</th><th>Params</th></tr></thead>
+      <tbody>
+        <tr><td>Input</td><td>grayscale image</td><td>28×28×1</td><td>0</td></tr>
+        <tr><td>Conv2D</td><td>32 filters, 3×3, ReLU</td><td>26×26×32</td><td>320</td></tr>
+        <tr><td>MaxPool2D</td><td>2×2</td><td>13×13×32</td><td>0</td></tr>
+        <tr><td>Conv2D</td><td>64 filters, 3×3, ReLU</td><td>11×11×64</td><td>18,496</td></tr>
+        <tr><td>MaxPool2D</td><td>2×2</td><td>5×5×64</td><td>0</td></tr>
+        <tr><td>Flatten</td><td>-</td><td>1600</td><td>0</td></tr>
+        <tr><td>Dense</td><td>64 neurons, ReLU</td><td>64</td><td>102,464</td></tr>
+        <tr><td>Dense</td><td>32 neurons, ReLU</td><td>32</td><td>2,080</td></tr>
+        <tr><td>Dense</td><td>10 neurons, Softmax</td><td>10</td><td>330</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="3">Total trainable parameters</td><td>123,690</td></tr></tfoot>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h2>What the first conv layer learned (32 filters, 3×3)</h2>
+    <div class="legend">Red = positive weight (looks for bright pixel here), blue = negative weight (looks for dark pixel here).</div>
+    <div class="filters" id="filters"></div>
+  </div>
+
+  <div class="card">
+    <h2>Model code</h2>
+<pre>cnn = models.Sequential([
+    layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)),
+    layers.MaxPool2D((2,2)),
+    layers.Conv2D(64, (3,3), activation='relu'),
+    layers.MaxPool2D((2,2)),
+    layers.Flatten(),
+    layers.Dense(64, activation='relu'),
+    layers.Dense(32, activation='relu'),
+    layers.Dense(10, activation='softmax')
+])</pre>
+  </div>
+
+  <footer>Built by <b>puneeth@fde</b></footer>
+</div>
+
+<script>
+/* ------------------------------------------------ drawing canvas */
+const canvas = document.getElementById("digitCanvas");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const predictBtn = document.getElementById("predictBtn");
+const clearBtn = document.getElementById("clearBtn");
+const digitEl = document.getElementById("digit");
+const confEl = document.getElementById("conf");
+
+function resetCanvas() {
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "white";
+  ctx.lineWidth = 22;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+}
+resetCanvas();
+
+let drawing = false, hasDrawn = false, busy = false;
+
+function pos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x:(e.clientX - r.left) * canvas.width / r.width,
+           y:(e.clientY - r.top) * canvas.height / r.height };
+}
+canvas.addEventListener("pointerdown", e => {
+  drawing = true; hasDrawn = true;
+  canvas.setPointerCapture(e.pointerId);
+  const p = pos(e);
+  ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + .1, p.y + .1); ctx.stroke();
+});
+canvas.addEventListener("pointermove", e => {
+  if (!drawing) return;
+  const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke();
+});
+function stop() { drawing = false; ctx.beginPath(); }
+canvas.addEventListener("pointerup", stop);
+canvas.addEventListener("pointercancel", stop);
+
+function setStatus(msg, err = false) {
+  statusEl.textContent = msg;
+  statusEl.className = err ? "error" : "";
+}
+
+/* ------------------------------------------------ pipeline stages */
+// data index: -1 = input image, 0..7 = backend layers in order
+const STAGES = [
+  { idx:-1, kind:"input",   title:"Input",          tags:["28×28×1"],           meta:"784 pixels",
+    desc:"Your drawing after cropping, resizing and centering." },
+  { idx:0,  kind:"conv",    title:"Conv2D",         tags:["32 filters 3×3","ReLU"], meta:"Output 26×26×32 · 320 params",
+    desc:"Each filter scans the image looking for one simple pattern (edge, line)." , wide:true },
+  { idx:1,  kind:"pool",    title:"MaxPooling 2×2", tags:["13×13×32"],          meta:"Output 13×13×32 · 0 params",
+    desc:"Keeps the strongest value of every 2×2 block. Half the size.", wide:true },
+  { idx:2,  kind:"conv",    title:"Conv2D",         tags:["64 filters 3×3","ReLU"], meta:"Output 11×11×64 · 18,496 params",
+    desc:"Combines edges into curves, corners and loops.", wide:true },
+  { idx:3,  kind:"pool",    title:"MaxPooling 2×2", tags:["5×5×64"],            meta:"Output 5×5×64 · 0 params",
+    desc:"Shrinks again. Keeps what is present, loosens where.", wide:true },
+  { idx:4,  kind:"flatten", title:"Flatten",        tags:["1600 values"],       meta:"Output 1600 · 0 params",
+    desc:"All maps unrolled into one long list (shown as a 40×40 grid)." },
+  { idx:5,  kind:"dense",   title:"Dense 64",       tags:["64 neurons","ReLU"], meta:"102,464 params",
+    desc:"Each neuron looks at all 1600 values and fires if it recognises its pattern." },
+  { idx:6,  kind:"dense",   title:"Dense 32",       tags:["32 neurons","ReLU"], meta:"2,080 params",
+    desc:"Combines the previous neurons into higher-level digit evidence." },
+  { idx:7,  kind:"output",  title:"Output 10",      tags:["10 neurons","Softmax"], meta:"330 params",
+    desc:"One neuron per digit. Softmax makes them add up to 100%." },
+];
+
+const flow = document.getElementById("flow");
+const stageEls = [];
+
+STAGES.forEach((s, i) => {
+  if (i > 0) {
+    const a = document.createElement("div");
+    a.className = "arrow"; a.textContent = "➜";
+    flow.appendChild(a);
+  }
+  const el = document.createElement("div");
+  el.className = "stage idle" + (s.wide ? " wide" : "");
+  el.innerHTML = `
+    <div class="title">${s.title}</div>
+    <div>${s.tags.map(t => `<span class="tag">${t}</span>`).join("")}</div>
+    <div class="meta">${s.meta}</div>
+    <div class="viz"><span class="wait">waiting for input...</span></div>
+    <div class="desc">${s.desc}</div>`;
+  flow.appendChild(el);
+  stageEls.push(el);
+});
+
+/* ------------------------------------------------ drawing helpers */
+function gray(cv, w, h, getV) {
+  cv.width = w; cv.height = h;
+  const c = cv.getContext("2d");
+  const img = c.createImageData(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = getV(x, y);
+    const k = (y * w + x) * 4;
+    img.data[k]   = v * 0.2;
+    img.data[k+1] = v;
+    img.data[k+2] = v * 0.5;
+    img.data[k+3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+}
+
+function renderInput(box, matrix) {
+  box.innerHTML = "";
+  const cv = document.createElement("canvas");
+  cv.className = "pix"; cv.style.width = "140px"; cv.style.height = "140px";
+  gray(cv, 28, 28, (x, y) => matrix[y][x] * 255);
+  // input shown in plain white
+  const c = cv.getContext("2d");
+  const img = c.createImageData(28, 28);
+  for (let y = 0; y < 28; y++) for (let x = 0; x < 28; x++) {
+    const v = matrix[y][x] * 255, k = (y * 28 + x) * 4;
+    img.data[k] = img.data[k+1] = img.data[k+2] = v; img.data[k+3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  box.appendChild(cv);
+}
+
+function renderMaps(box, maps) {
+  box.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "maps";
+  maps.forEach((m, i) => {
+    const cv = document.createElement("canvas");
+    cv.title = "Feature map #" + (i + 1);
+    gray(cv, m[0].length, m.length, (x, y) => m[y][x]);
+    grid.appendChild(cv);
+  });
+  box.appendChild(grid);
+}
+
+function renderFlatten(box, vals) {
+  box.innerHTML = "";
+  const cv = document.createElement("canvas");
+  cv.className = "pix"; cv.style.width = "160px"; cv.style.height = "160px";
+  gray(cv, 40, 40, (x, y) => vals[y * 40 + x] * 255);
+  box.appendChild(cv);
+}
+
+function renderDense(box, vals) {
+  box.innerHTML = "";
+  const cols = 8, cell = 24, rows = Math.ceil(vals.length / cols);
+  const cv = document.createElement("canvas");
+  cv.width = cols * cell; cv.height = rows * cell;
+  const c = cv.getContext("2d");
+  vals.forEach((v, i) => {
+    const x = (i % cols) * cell + cell / 2, y = Math.floor(i / cols) * cell + cell / 2;
+    c.beginPath(); c.arc(x, y, 9, 0, Math.PI * 2);
+    c.fillStyle = `rgba(34,197,94,${0.1 + 0.9 * v})`; c.fill();
+    c.strokeStyle = "#2b3a55"; c.lineWidth = 1; c.stroke();
+  });
+  box.appendChild(cv);
+}
+
+function renderOutput(box, probs) {
+  box.innerHTML = "";
+  box.style.flexDirection = "column";
+  const top = probs.indexOf(Math.max(...probs));
+  probs.forEach((p, d) => {
+    const row = document.createElement("div");
+    row.className = "out-row" + (d === top ? " top" : "");
+    row.innerHTML = `<span class="d">${d}</span><div class="bar"><div class="fill"></div></div>
+      <span class="v">${(p * 100).toFixed(1)}%</span>`;
+    box.appendChild(row);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      row.querySelector(".fill").style.width = (p * 100) + "%";
+    }));
+  });
+}
+
+function renderStage(i, data) {
+  const s = STAGES[i];
+  const box = stageEls[i].querySelector(".viz");
+  if (s.kind === "input") return renderInput(box, data.processed);
+  const layer = data.layers[s.idx];
+  if (s.kind === "conv" || s.kind === "pool") return renderMaps(box, layer.data);
+  if (s.kind === "flatten") return renderFlatten(box, layer.data);
+  if (s.kind === "dense") return renderDense(box, layer.data);
+  if (s.kind === "output") return renderOutput(box, layer.data);
+}
+
+/* ------------------------------------------------ animation */
+let timers = [];
+
+function resetStages() {
+  timers.forEach(clearTimeout); timers = [];
+  stageEls.forEach(el => {
+    el.classList.add("idle"); el.classList.remove("lit");
+    const v = el.querySelector(".viz");
+    v.style.flexDirection = ""; v.innerHTML = '<span class="wait">waiting for input...</span>';
+  });
+}
+
+function animateThrough(data) {
+  resetStages();
+  STAGES.forEach((_, i) => {
+    timers.push(setTimeout(() => {
+      renderStage(i, data);
+      stageEls[i].classList.remove("idle");
+      stageEls.forEach((e, j) => e.classList.toggle("lit", j === i));
+      const mobile = window.matchMedia("(max-width: 760px)").matches;
+      stageEls[i].scrollIntoView({ behavior:"smooth", inline:"center", block: mobile ? "center" : "nearest" });
+    }, i * 650));
+  });
+}
+
+/* ------------------------------------------------ buttons */
+clearBtn.addEventListener("click", () => {
+  resetCanvas(); hasDrawn = false;
+  digitEl.textContent = "-"; confEl.textContent = "Confidence: --";
+  resetStages();
+  setStatus("Canvas cleared. Draw a digit.");
+});
+
+predictBtn.addEventListener("click", async () => {
+  if (busy) return;
+  if (!hasDrawn) { setStatus("Please draw a digit first.", true); return; }
+  busy = true; predictBtn.disabled = true;
+  setStatus("Running through the network...");
+  try {
+    const res = await fetch("/predict", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ image: canvas.toDataURL("image/png") })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Server error");
+    if (data.layers.length !== 8) throw new Error("Model layout differs from the expected 8 layers.");
+
+    digitEl.textContent = data.digit;
+    confEl.textContent = `Confidence: ${data.confidence.toFixed(2)}%`;
+    animateThrough(data);
+    setStatus("Done. Scroll the network above to see each layer.");
+  } catch (err) {
+    setStatus("Prediction failed: " + err.message, true);
+  } finally {
+    busy = false; predictBtn.disabled = false;
+  }
+});
+
+/* ------------------------------------------------ learned filters */
+fetch("/filters").then(r => r.json()).then(({ filters }) => {
+  const box = document.getElementById("filters");
+  filters.forEach((f, i) => {
+    const cv = document.createElement("canvas");
+    cv.width = 3; cv.height = 3; cv.title = "Filter #" + (i + 1);
+    const c = cv.getContext("2d");
+    const img = c.createImageData(3, 3);
+    for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
+      const v = f[y][x], k = (y * 3 + x) * 4;
+      img.data[k]   = 25 + (v > 0 ?  230 * v : 0);
+      img.data[k+1] = 25;
+      img.data[k+2] = 25 + (v < 0 ? -230 * v : 0);
+      img.data[k+3] = 255;
+    }
+    c.putImageData(img, 0, 0);
+    box.appendChild(cv);
+  });
+}).catch(() => {});
+</script>
+</body>
+</html>
